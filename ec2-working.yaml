@@ -1,3 +1,7 @@
+# Description of what this change include
+# Revision Number
+# Date
+
 AWSTemplateFormatVersion: "2010-09-09"
 Description: Amazon Elastic Compute Cloud (EC2) Template
 Parameters:
@@ -10,6 +14,13 @@ Resources:
     Properties:
       ImageId: !Ref LatestAmiId
       KeyName: !Ref AWS::AccountId
+      BlockDeviceMappings:
+      - DeviceName: /dev/sdm
+        Ebs:
+             VolumeType: io1
+             Iops: 200
+             DeleteOnTermination: false
+             VolumeSize: 20
       InstanceType: t2.micro
       NetworkInterfaces:
         - AssociatePublicIpAddress: "true"
