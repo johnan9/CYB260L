@@ -1,6 +1,6 @@
 # Description of what this change includes
 # Revision number
-# Date
+# 3/25/2025
 
 AWSTemplateFormatVersion: '2010-09-09'
 Description: CloudFormation template to create a VPC spanning 3 AZs in us-west-2 region
