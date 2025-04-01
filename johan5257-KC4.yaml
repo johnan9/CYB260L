@@ -1,0 +1,226 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation Template for Scalable Web Application with High Availability and Fault Tolerance
+
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access
+    Type: AWS::EC2::KeyPair::KeyName
+
+Resources:
+
+  WebAppInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [ !Ref EC2Role ]
+
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP and SSH access
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: WebAppVPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  Route:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref RouteTable
+
+  SubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref RouteTable
+
+  LaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: ami-0c02fb55956c7d316  # Update this to your region's Amazon Linux 2 AMI
+      InstanceType: t2.micro
+      SecurityGroups: [ !Ref WebSecurityGroup ]
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref WebAppInstanceProfile
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: [ !Ref PublicSubnet1, !Ref PublicSubnet2 ]
+      LaunchConfigurationName: !Ref LaunchConfig
+      MinSize: 2
+      MaxSize: 4
+      TargetGroupARNs: [ !Ref ALBTargetGroup ]
+      Tags:
+        - Key: Name
+          Value: AutoScaledWebApp
+          PropagateAtLaunch: true
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: WebAppALB
+      Subnets: [ !Ref PublicSubnet1, !Ref PublicSubnet2 ]
+      SecurityGroups: [ !Ref WebSecurityGroup ]
+      Scheme: internet-facing
+      Type: application
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VPC
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      HealthCheckPath: /
+
+  AppEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      KeyName: !Ref KeyName
+      ImageId: ami-0c02fb55956c7d316
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds: [ !Ref WebSecurityGroup ]
+      IamInstanceProfile: !Ref WebAppInstanceProfile
+      Tags:
+        - Key: Name
+          Value: WebAppInstance
+
+  AppEBSVolume:
+    Type: AWS::EC2::Volume
+    Properties:
+      AvailabilityZone: !GetAtt AppEC2Instance.AvailabilityZone
+      Size: 8
+      VolumeType: gp2
+      Tags:
+        - Key: Name
+          Value: WebAppData
+
+  AppEBSAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref AppEC2Instance
+      VolumeId: !Ref AppEBSVolume
+      Device: /dev/sdf
+
+  BackendEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      KeyName: !Ref KeyName
+      ImageId: ami-0c02fb55956c7d316
+      SubnetId: !Ref PublicSubnet2
+      SecurityGroupIds: [ !Ref WebSecurityGroup ]
+      IamInstanceProfile: !Ref WebAppInstanceProfile
+      Tags:
+        - Key: Name
+          Value: BackendInstance
+
+  BackendEBSVolume:
+    Type: AWS::EC2::Volume
+    Properties:
+      AvailabilityZone: !GetAtt BackendEC2Instance.AvailabilityZone
+      Size: 8
+      VolumeType: gp2
+      Tags:
+        - Key: Name
+          Value: BackendData
+
+  BackendEBSAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref BackendEC2Instance
+      VolumeId: !Ref BackendEBSVolume
+      Device: /dev/sdf
+
+  StaticContentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "static-content-bucket-${AWS::StackName}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+
+Outputs:
+  ALBURL:
+    Description: URL of the Application Load Balancer
+    Value: !Sub "http://${ALB.DNSName}"
+  StaticContentBucket:
+    Description: S3 Bucket for static content
+    Value: !Ref StaticContentBucket
